@@ -1,0 +1,68 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2820
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fnil\fcharset0 Menlo-Regular;}
+{\colortbl;\red255\green255\blue255;\red202\green202\blue202;}
+{\*\expandedcolortbl;;\cssrgb\c83137\c83137\c83137;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww28600\viewh17440\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 #Quality control\
+\
+. /home/dmuzondiwa/lustre/projects/VC_Dillon/config.sh\
+\
+\
+##files are saved as:\
+# ID_1.fastq for R1\
+# ID_2.fastq for R2\
+\
+#fastqc\
+\
+\pard\pardeftab720\partightenfactor0
+
+\f1 \cf2 \expnd0\expndtw0\kerning0
+\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0 \cf0 \kerning1\expnd0\expndtw0 fastqc -o $\{fastqc\} $\{fastq\}*\
+\
+#Trimming\
+trim_galore --paired --illumina --fastqc --output_dir $\{trim\}$\{ID\} $\{fastq\}$\{ID\}_1.fastq.gz $\{fastq\}$\{ID\}_2.fastq.gz\
+\
+#Mapping\
+bwa mem  -Y -M -R '@RG\\tID:ID_\\tSM:ID_' -t 24 reference/ref.fa $\{wkd\}processed_fastq/ID_1.fq.gz $\{wkd\}processed_fastq/ID_2.fq.gz | \\\
+samclip --max 10 --ref reference/ref.fa.fai | samtools sort -n -l 0 -T /tmp --threads 11 -m 666M \\ | samtools fixmate -m --threads 11 - - |  \\\
+samtools sort -l 0 -T /tmp --threads 11 -m 666M | samtools markdup -T /tmp --threads 11 -r -s - - > ID.bam\
+\
+##indexing of alignments\
+samtools index ID.bam\
+\
+#Variant calling\
+freebayes-parallel reference/ref.txt 24 -p 1 -P 0 -C 2 -F 0.05 --min-coverage 10 --min-repeat-entropy 1.0 -q 13 -m 60 --strict-vcf   -f reference/ref.fa snps.bam > ID.vcf\
+\
+#Variant filtering\
+\
+bcftools view --include 'FMT/GT="1/1" && QUAL>20 && INFO/MQ>40 && FMT/DP>=10 && (FMT/AO)/(FMT/DP)>=0' ID.vcf | vt normalize -r reference/ref.fa - | bcftools annotate --remove '^INFO/TYPE,^INFO/DP,^INFO/RO,^INFO/AO,^INFO/AB,^FORMAT/GT,^FORMAT/DP,^FORMAT/RO,^FORMAT/AO,^FORMAT/QR,^FORMAT/QA,^FORMAT/GL' > ID.filt.vcf\
+\
+#compress  VCF\
+\
+bgzip   ID.filt.vcf\
+\
+### bcftools index -f  ID.filt.vcf.gz\
+\
+#Annotate each VCF file to have consistent chromosome notation\
+\
+bcftools annotate --rename-chrs chrom_annot  ID.filt.vcf.gz -Oz -o ID.filt_annotated.vcf.gz\
+\
+#merge all VCF files\
+bcftools merge -0 --missing-to-ref --threads 8  -o merged.vcf.gz -O z *.vcf.gz\
+\
+#Convert merged file to SNP alignment\
+\
+python vcf2phylip.py -i merged.vcf.gz \
+\
+#extract variable positions\
+snp-sites -m  merged.min4.fasta -o  merged-msa.fasta\
+#Infer phylogeny with IQtree2\
+Iqtree2 -s merged-msa.fasta -bb 1000 -nt AUTO\
+\
+\
+}
